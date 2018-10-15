@@ -1,22 +1,18 @@
 package com.mapbox.rctmgl.components.mapview;
 
-import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.PointF;
 import android.graphics.RectF;
 import android.location.Location;
 import android.os.Handler;
 import android.support.annotation.NonNull;
-import android.text.LoginFilter;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.MotionEvent;
 
-import com.facebook.react.bridge.ActivityEventListener;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.bridge.ReadableArray;
@@ -39,9 +35,7 @@ import com.mapbox.mapboxsdk.maps.MapboxMapOptions;
 import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.maps.UiSettings;
 import com.mapbox.mapboxsdk.plugins.localization.LocalizationPlugin;
-import com.mapbox.mapboxsdk.plugins.locationlayer.LocationLayerMode;
 import com.mapbox.mapboxsdk.plugins.locationlayer.LocationLayerPlugin;
-import com.mapbox.mapboxsdk.storage.FileSource;
 import com.mapbox.mapboxsdk.style.layers.Layer;
 import com.mapbox.mapboxsdk.style.layers.Property;
 import com.mapbox.mapboxsdk.style.layers.PropertyFactory;
@@ -399,12 +393,12 @@ public class RCTMGLMapView extends MapView implements
             mMap.moveCamera(CameraUpdateFactory.newCameraPosition(buildCamera()), new MapboxMap.CancelableCallback() {
                 @Override
                 public void onCancel() {
-                    sendRegionChangeEvent(false);
+                    sendRegionDidChangeEvent();
                 }
 
                 @Override
                 public void onFinish() {
-                    sendRegionChangeEvent(false);
+                    sendRegionDidChangeEvent();
                 }
             });
         }
@@ -426,31 +420,16 @@ public class RCTMGLMapView extends MapView implements
             markerViewManager.invalidateViewMarkersInVisibleRegion();
         }
 
-        final RCTMGLMapView self = this;
         mMap.addOnCameraIdleListener(new MapboxMap.OnCameraIdleListener() {
-            long lastTimestamp = System.currentTimeMillis();
-            boolean lastAnimated = false; // Workaround for the event called twice
-
             @Override
             public void onCameraIdle() {
                 if (mPointAnnotations.size() > 0) {
                     markerViewManager.invalidateViewMarkersInVisibleRegion();
                 }
 
-                long curTimestamp = System.currentTimeMillis();
-                boolean curAnimated = mCameraChangeTracker.isAnimated();
-                if (curTimestamp - lastTimestamp < 500 && curAnimated == lastAnimated) {
-                      // even if we don't send the change event, we need to set the reason...
-                    //this happens when you have multiple calls to setCamera very quickly. This method will short circuit,
-                    //and then the next time the user moves the map, it will think it is NOT from a user interaction , because
-                    // this flag was not reset
-                    mCameraChangeTracker.setReason(-1);
-                    return;
+                if (!mCameraChangeTracker.isRegionChangeInProgress()) {
+                    sendRegionDidChangeEvent();
                 }
-
-                sendRegionChangeEvent(curAnimated);
-                lastTimestamp = curTimestamp;
-                lastAnimated = curAnimated;
             }
         });
 
@@ -691,11 +670,13 @@ public class RCTMGLMapView extends MapView implements
 
         switch (changed) {
             case REGION_WILL_CHANGE:
+                mCameraChangeTracker.setRegionChangeInProgress(true);
                 if (!isSuppressingChangeDelimiters()) {
                     event = new MapChangeEvent(this, makeRegionPayload(false), EventTypes.REGION_WILL_CHANGE);
                 }
                 break;
             case REGION_WILL_CHANGE_ANIMATED:
+                mCameraChangeTracker.setRegionChangeInProgress(true);
                 if (!isSuppressingChangeDelimiters()) {
                     event = new MapChangeEvent(this, makeRegionPayload(true), EventTypes.REGION_WILL_CHANGE);
                 }
@@ -705,9 +686,11 @@ public class RCTMGLMapView extends MapView implements
                 break;
             case REGION_DID_CHANGE:
                 mCameraChangeTracker.setRegionChangeAnimated(false);
+                mCameraChangeTracker.setRegionChangeInProgress(false);
                 break;
             case REGION_DID_CHANGE_ANIMATED:
                 mCameraChangeTracker.setRegionChangeAnimated(true);
+                mCameraChangeTracker.setRegionChangeInProgress(false);
                 break;
             case WILL_START_LOADING_MAP:
                 event = new MapChangeEvent(this, EventTypes.WILL_START_LOADING_MAP);
@@ -1234,7 +1217,7 @@ public class RCTMGLMapView extends MapView implements
             postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    sendRegionChangeEvent(false);
+                    sendRegionDidChangeEvent();
                 }
             }, 200);
         }
@@ -1465,10 +1448,11 @@ public class RCTMGLMapView extends MapView implements
         return cameraPosition.bearing;
     }
 
-    private void sendRegionChangeEvent(boolean isAnimated) {
+    private void sendRegionDidChangeEvent() {
+        boolean isAnimated = mCameraChangeTracker.isAnimated();
         IEvent event = new MapChangeEvent(this, makeRegionPayload(isAnimated), EventTypes.REGION_DID_CHANGE);
         mManager.handleEvent(event);
-        mCameraChangeTracker.setReason(-1);
+        mCameraChangeTracker.reset();
     }
 
     private void sendUserLocationUpdateEvent(Location location) {
