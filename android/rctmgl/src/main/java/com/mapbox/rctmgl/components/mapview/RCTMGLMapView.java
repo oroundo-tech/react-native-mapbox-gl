@@ -913,7 +913,6 @@ public class RCTMGLMapView extends MapView implements
                 @Override
                 public void onCompleteAll() {
                     callback.onFinish();
-                    mCameraChangeTracker.setReason(3);
                 }
             });
         } else {
@@ -921,13 +920,53 @@ public class RCTMGLMapView extends MapView implements
                 @Override
                 public void onCancel() {
                     callback.onCancel();
-                    mCameraChangeTracker.setReason(1);
+                    // onCancel is sometimes triggered by user interaction,
+                    // but sometimes by another call to setCamera.
+                    // There is observation that when
+                    // it is triggered by user interaction,
+                    // onCameraIdle is already called, and relevant event is already sent.
+                    // When it is triggered by another call to setCamera, then first
+                    // onCameraIdle is called between REGION_WILL_CHANGE_ANIMATED and
+                    // REGION_DID_CHANGE_ANIMATED (and thus it is discarded), and then
+                    // onCancel is called.
+                    // Maybe this will change in future, but in any case,
+                    // unconditionally setting reason here to USER_GESTURE,
+                    // is wrong and dangerous, and it is a bug.
+                    // So for this to work properly right now, we will use above
+                    // observations and add big TODO.
+                    // TODO: If above behaviour changes (perhaps due to changes in Native SDK):
+                    // TODO: Revise this method and its behaviour.
+
+                    if (!mCameraChangeTracker.isEmpty()) {
+                        // onCameraIdle did not call sendRegionDidChangeEvent yet,
+                        // that means, it is canceled by call to setCamera.
+
+                        mCameraChangeTracker.setReason(CameraChangeTracker.SDK);
+                        sendRegionDidChangeEvent();
+                    } // else {
+                        // onCameraIdle has already sent one event, for original reason
+                        // if we get here, it "means"(see comment above) that user has
+                        // interrupted animation.
+                        // But there is NO GUARANTEE that it is always the case.
+                        // If user taps map to stop its movement, it would usually make another
+                        // gesture not long after. That could compensate for lack of
+                        // indication that user had interacted to stop its movement.
+
+                        // mCameraChangeTracker.setReason(CameraChangeTracker.USER_GESTURE);
+                        // sendRegionDidChangeEvent();
+
+                        // ... BUT, even if we send it, this event is often dropped,
+                        // because it comes to close after first region did change event.
+                    // }
                 }
 
                 @Override
                 public void onFinish() {
                     callback.onFinish();
-                    mCameraChangeTracker.setReason(3);
+                    // When duration of camera movement is 0 and FlightMode.NONE, this is called after onCameraIdle
+                    // so we should not touch CameraChangeTracker here, as relevant event
+                    // is already sent.
+                    // Anyway, setting reason or anything in CameraChangeTracker here is useless.
                 }
             });
             mCameraUpdateQueue.offer(stop);
