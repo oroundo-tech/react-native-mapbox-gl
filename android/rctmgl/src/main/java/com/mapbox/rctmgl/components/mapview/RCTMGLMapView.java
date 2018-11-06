@@ -144,6 +144,7 @@ public class RCTMGLMapView extends MapView implements
     private Point mCenterCoordinate;
 
     private int mChangeDelimiterSuppressionDepth;
+    private boolean mEnableChangeDelimiterSuppression;
 
     private LocationManager.OnUserLocationChange mLocationChangeListener = new LocationManager.OnUserLocationChange() {
         @Override
@@ -514,7 +515,9 @@ public class RCTMGLMapView extends MapView implements
         if (eventAction == MotionEvent.ACTION_DOWN) {
             mChangeDelimiterSuppressionDepth = 0;
         } else if (eventAction == MotionEvent.ACTION_MOVE) {
-            mChangeDelimiterSuppressionDepth++;
+            if (mEnableChangeDelimiterSuppression) {
+                mChangeDelimiterSuppressionDepth++;
+            }
         } else if (eventAction == MotionEvent.ACTION_CANCEL) {
             mChangeDelimiterSuppressionDepth = 0;
         } else if (eventAction == MotionEvent.ACTION_UP) {
@@ -672,12 +675,18 @@ public class RCTMGLMapView extends MapView implements
             case REGION_WILL_CHANGE:
                 mCameraChangeTracker.setRegionChangeInProgress(true);
                 if (!isSuppressingChangeDelimiters()) {
+                    // now that at least one RegionWillChange is going to be fired
+                    // we can enable change delimiter suppression
+                    mEnableChangeDelimiterSuppression = true;
                     event = new MapChangeEvent(this, makeRegionPayload(false), EventTypes.REGION_WILL_CHANGE);
                 }
                 break;
             case REGION_WILL_CHANGE_ANIMATED:
                 mCameraChangeTracker.setRegionChangeInProgress(true);
                 if (!isSuppressingChangeDelimiters()) {
+                    // now that at least one RegionWillChange is going to be fired
+                    // we can enable change delimiter suppression
+                    mEnableChangeDelimiterSuppression = true;
                     event = new MapChangeEvent(this, makeRegionPayload(true), EventTypes.REGION_WILL_CHANGE);
                 }
                 break;
@@ -1492,6 +1501,9 @@ public class RCTMGLMapView extends MapView implements
         IEvent event = new MapChangeEvent(this, makeRegionPayload(isAnimated), EventTypes.REGION_DID_CHANGE);
         mManager.handleEvent(event);
         mCameraChangeTracker.reset();
+
+        // we want to make sure that next RegionWillChange if fired
+        mEnableChangeDelimiterSuppression = false;
     }
 
     private void sendUserLocationUpdateEvent(Location location) {
