@@ -1,19 +1,18 @@
 package com.mapbox.rctmgl.components.mapview.helpers;
 
-import android.util.Log;
-
 /**
  * Created by nickitaliano on 12/12/17.
  */
 
 public class CameraChangeTracker {
-    public static final int USER_GESTURE = 1;
-    public static final int USER_ANIMATION = 2;
-    public static final int SDK = 3;
+    public static final int USER_GESTURE = 1; // defined in SDK as REASON_API_GESTURE
+    public static final int USER_ANIMATION = 2; // defined in SDK as REASON_DEVELOPER_ANIMATION
+    public static final int SDK = 3; // defined in SDK as REASON_API_ANIMATION
     public static final int EMPTY = -1;
 
     private int reason;
     private boolean isRegionChangeAnimated;
+    private boolean regionChangeInProgress; // between WILL and DID change
 
     public void setReason(int reason) {
         this.reason = reason;
@@ -21,6 +20,10 @@ public class CameraChangeTracker {
 
     public void setRegionChangeAnimated(boolean isRegionChangeAnimated) {
         this.isRegionChangeAnimated = isRegionChangeAnimated;
+    }
+
+    public void setRegionChangeInProgress(boolean inProgress) {
+        regionChangeInProgress = inProgress;
     }
 
     public boolean isUserInteraction() {
@@ -33,5 +36,14 @@ public class CameraChangeTracker {
 
     public boolean isEmpty() {
         return reason == EMPTY;
+    }
+
+    public boolean isRegionChangeInProgress() {
+        return regionChangeInProgress;
+    }
+
+    public void reset() {
+        reason = EMPTY;
+        isRegionChangeAnimated = false;
     }
 }

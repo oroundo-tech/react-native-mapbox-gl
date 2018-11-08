@@ -270,7 +270,7 @@ class MapView extends React.Component {
     userTrackingMode: MapboxGL.UserTrackingModes.None,
     styleURL: MapboxGL.StyleURL.Street,
     surfaceView: false,
-    regionWillChangeDebounceTime: 10,
+    regionWillChangeDebounceTime: 0,
     regionDidChangeDebounceTime: 500,
   };
 
@@ -717,14 +717,22 @@ class MapView extends React.Component {
 
     switch (type) {
       case MapboxGL.EventTypes.RegionWillChange:
-        this._onDebouncedRegionWillChange(payload);
-        return;
+        if (this.props.regionWillChangeDebounceTime > 0) {
+          this._onDebouncedRegionWillChange(payload);
+        } else {
+          propName = 'onRegionWillChange';
+        }
+        break;
       case MapboxGL.EventTypes.RegionIsChanging:
         propName = 'onRegionIsChanging';
         break;
       case MapboxGL.EventTypes.RegionDidChange:
-        this._onDebouncedRegionDidChange(payload);
-        return;
+        if (this.props.regionDidChangeDebounceTime) {
+          this._onDebouncedRegionDidChange(payload);
+        } else {
+          propName = 'onRegionDidChange';
+        }
+        break;
       case MapboxGL.EventTypes.UserLocationUpdated:
         propName = 'onUserLocationUpdate';
         break;
@@ -866,3 +874,4 @@ if (isAndroid()) {
 }
 
 export default MapView;
+

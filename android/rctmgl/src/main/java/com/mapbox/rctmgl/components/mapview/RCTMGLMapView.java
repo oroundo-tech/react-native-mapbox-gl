@@ -1,22 +1,18 @@
 package com.mapbox.rctmgl.components.mapview;
 
-import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.PointF;
 import android.graphics.RectF;
 import android.location.Location;
 import android.os.Handler;
 import android.support.annotation.NonNull;
-import android.text.LoginFilter;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.MotionEvent;
 
-import com.facebook.react.bridge.ActivityEventListener;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.bridge.ReadableArray;
@@ -39,9 +35,7 @@ import com.mapbox.mapboxsdk.maps.MapboxMapOptions;
 import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.maps.UiSettings;
 import com.mapbox.mapboxsdk.plugins.localization.LocalizationPlugin;
-import com.mapbox.mapboxsdk.plugins.locationlayer.LocationLayerMode;
 import com.mapbox.mapboxsdk.plugins.locationlayer.LocationLayerPlugin;
-import com.mapbox.mapboxsdk.storage.FileSource;
 import com.mapbox.mapboxsdk.style.layers.Layer;
 import com.mapbox.mapboxsdk.style.layers.Property;
 import com.mapbox.mapboxsdk.style.layers.PropertyFactory;
@@ -150,6 +144,7 @@ public class RCTMGLMapView extends MapView implements
     private Point mCenterCoordinate;
 
     private int mChangeDelimiterSuppressionDepth;
+    private boolean mEnableChangeDelimiterSuppression;
 
     private LocationManager.OnUserLocationChange mLocationChangeListener = new LocationManager.OnUserLocationChange() {
         @Override
@@ -399,12 +394,12 @@ public class RCTMGLMapView extends MapView implements
             mMap.moveCamera(CameraUpdateFactory.newCameraPosition(buildCamera()), new MapboxMap.CancelableCallback() {
                 @Override
                 public void onCancel() {
-                    sendRegionChangeEvent(false);
+                    sendRegionDidChangeEvent();
                 }
 
                 @Override
                 public void onFinish() {
-                    sendRegionChangeEvent(false);
+                    sendRegionDidChangeEvent();
                 }
             });
         }
@@ -426,31 +421,16 @@ public class RCTMGLMapView extends MapView implements
             markerViewManager.invalidateViewMarkersInVisibleRegion();
         }
 
-        final RCTMGLMapView self = this;
         mMap.addOnCameraIdleListener(new MapboxMap.OnCameraIdleListener() {
-            long lastTimestamp = System.currentTimeMillis();
-            boolean lastAnimated = false; // Workaround for the event called twice
-
             @Override
             public void onCameraIdle() {
                 if (mPointAnnotations.size() > 0) {
                     markerViewManager.invalidateViewMarkersInVisibleRegion();
                 }
 
-                long curTimestamp = System.currentTimeMillis();
-                boolean curAnimated = mCameraChangeTracker.isAnimated();
-                if (curTimestamp - lastTimestamp < 500 && curAnimated == lastAnimated) {
-                      // even if we don't send the change event, we need to set the reason...
-                    //this happens when you have multiple calls to setCamera very quickly. This method will short circuit,
-                    //and then the next time the user moves the map, it will think it is NOT from a user interaction , because
-                    // this flag was not reset
-                    mCameraChangeTracker.setReason(-1);
-                    return;
+                if (!mCameraChangeTracker.isRegionChangeInProgress()) {
+                    sendRegionDidChangeEvent();
                 }
-
-                sendRegionChangeEvent(curAnimated);
-                lastTimestamp = curTimestamp;
-                lastAnimated = curAnimated;
             }
         });
 
@@ -535,7 +515,9 @@ public class RCTMGLMapView extends MapView implements
         if (eventAction == MotionEvent.ACTION_DOWN) {
             mChangeDelimiterSuppressionDepth = 0;
         } else if (eventAction == MotionEvent.ACTION_MOVE) {
-            mChangeDelimiterSuppressionDepth++;
+            if (mEnableChangeDelimiterSuppression) {
+                mChangeDelimiterSuppressionDepth++;
+            }
         } else if (eventAction == MotionEvent.ACTION_CANCEL) {
             mChangeDelimiterSuppressionDepth = 0;
         } else if (eventAction == MotionEvent.ACTION_UP) {
@@ -691,12 +673,20 @@ public class RCTMGLMapView extends MapView implements
 
         switch (changed) {
             case REGION_WILL_CHANGE:
+                mCameraChangeTracker.setRegionChangeInProgress(true);
                 if (!isSuppressingChangeDelimiters()) {
+                    // now that at least one RegionWillChange is going to be fired
+                    // we can enable change delimiter suppression
+                    mEnableChangeDelimiterSuppression = true;
                     event = new MapChangeEvent(this, makeRegionPayload(false), EventTypes.REGION_WILL_CHANGE);
                 }
                 break;
             case REGION_WILL_CHANGE_ANIMATED:
+                mCameraChangeTracker.setRegionChangeInProgress(true);
                 if (!isSuppressingChangeDelimiters()) {
+                    // now that at least one RegionWillChange is going to be fired
+                    // we can enable change delimiter suppression
+                    mEnableChangeDelimiterSuppression = true;
                     event = new MapChangeEvent(this, makeRegionPayload(true), EventTypes.REGION_WILL_CHANGE);
                 }
                 break;
@@ -705,9 +695,11 @@ public class RCTMGLMapView extends MapView implements
                 break;
             case REGION_DID_CHANGE:
                 mCameraChangeTracker.setRegionChangeAnimated(false);
+                mCameraChangeTracker.setRegionChangeInProgress(false);
                 break;
             case REGION_DID_CHANGE_ANIMATED:
                 mCameraChangeTracker.setRegionChangeAnimated(true);
+                mCameraChangeTracker.setRegionChangeInProgress(false);
                 break;
             case WILL_START_LOADING_MAP:
                 event = new MapChangeEvent(this, EventTypes.WILL_START_LOADING_MAP);
@@ -930,7 +922,6 @@ public class RCTMGLMapView extends MapView implements
                 @Override
                 public void onCompleteAll() {
                     callback.onFinish();
-                    mCameraChangeTracker.setReason(3);
                 }
             });
         } else {
@@ -938,13 +929,53 @@ public class RCTMGLMapView extends MapView implements
                 @Override
                 public void onCancel() {
                     callback.onCancel();
-                    mCameraChangeTracker.setReason(1);
+                    // onCancel is sometimes triggered by user interaction,
+                    // but sometimes by another call to setCamera.
+                    // There is observation that when
+                    // it is triggered by user interaction,
+                    // onCameraIdle is already called, and relevant event is already sent.
+                    // When it is triggered by another call to setCamera, then first
+                    // onCameraIdle is called between REGION_WILL_CHANGE_ANIMATED and
+                    // REGION_DID_CHANGE_ANIMATED (and thus it is discarded), and then
+                    // onCancel is called.
+                    // Maybe this will change in future, but in any case,
+                    // unconditionally setting reason here to USER_GESTURE,
+                    // is wrong and dangerous, and it is a bug.
+                    // So for this to work properly right now, we will use above
+                    // observations and add big TODO.
+                    // TODO: If above behaviour changes (perhaps due to changes in Native SDK):
+                    // TODO: Revise this method and its behaviour.
+
+                    if (!mCameraChangeTracker.isEmpty()) {
+                        // onCameraIdle did not call sendRegionDidChangeEvent yet,
+                        // that means, it is canceled by call to setCamera.
+
+                        mCameraChangeTracker.setReason(CameraChangeTracker.SDK);
+                        sendRegionDidChangeEvent();
+                    } // else {
+                        // onCameraIdle has already sent one event, for original reason
+                        // if we get here, it "means"(see comment above) that user has
+                        // interrupted animation.
+                        // But there is NO GUARANTEE that it is always the case.
+                        // If user taps map to stop its movement, it would usually make another
+                        // gesture not long after. That could compensate for lack of
+                        // indication that user had interacted to stop its movement.
+
+                        // mCameraChangeTracker.setReason(CameraChangeTracker.USER_GESTURE);
+                        // sendRegionDidChangeEvent();
+
+                        // ... BUT, even if we send it, this event is often dropped,
+                        // because it comes to close after first region did change event.
+                    // }
                 }
 
                 @Override
                 public void onFinish() {
                     callback.onFinish();
-                    mCameraChangeTracker.setReason(3);
+                    // When duration of camera movement is 0 and FlightMode.NONE, this is called after onCameraIdle
+                    // so we should not touch CameraChangeTracker here, as relevant event
+                    // is already sent.
+                    // Anyway, setting reason or anything in CameraChangeTracker here is useless.
                 }
             });
             mCameraUpdateQueue.offer(stop);
@@ -1234,7 +1265,7 @@ public class RCTMGLMapView extends MapView implements
             postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    sendRegionChangeEvent(false);
+                    sendRegionDidChangeEvent();
                 }
             }, 200);
         }
@@ -1465,10 +1496,14 @@ public class RCTMGLMapView extends MapView implements
         return cameraPosition.bearing;
     }
 
-    private void sendRegionChangeEvent(boolean isAnimated) {
+    private void sendRegionDidChangeEvent() {
+        boolean isAnimated = mCameraChangeTracker.isAnimated();
         IEvent event = new MapChangeEvent(this, makeRegionPayload(isAnimated), EventTypes.REGION_DID_CHANGE);
         mManager.handleEvent(event);
-        mCameraChangeTracker.setReason(-1);
+        mCameraChangeTracker.reset();
+
+        // we want to make sure that next RegionWillChange if fired
+        mEnableChangeDelimiterSuppression = false;
     }
 
     private void sendUserLocationUpdateEvent(Location location) {
