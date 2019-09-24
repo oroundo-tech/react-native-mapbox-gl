@@ -38,13 +38,17 @@
     if ([self isFunction]) {
         return [self makeStyleFunction];
     }
-    
+
     id rawValue = self.payload[@"value"];
-    
+
     if ([self.type isEqualToString:@"color"]) {
         rawValue = [RCTMGLUtils toColor:rawValue];
     } else if ([self.type isEqualToString:@"translate"]) {
         rawValue = [NSValue valueWithCGVector:[RCTMGLUtils toCGVector:rawValue]];
+    } else if ([self.type isEqualToString:@"enum"]) {
+        // ensure we pass through values as NSUInteger when mapping to an MGL enum
+        NSUInteger uintValue = [(NSNumber*)rawValue unsignedIntegerValue];
+        rawValue = [NSValue value:&uintValue withObjCType:@encode(NSUInteger)];
     }
 
     // check for overrides that handle special cases like NSArray vs CGVector
@@ -54,12 +58,12 @@
             rawValue = [NSValue valueWithCGVector:[RCTMGLUtils toCGVector:rawValue]];
         }
     }
-    
+
     id propertyValue = self.payload[@"propertyValue"];
     if (propertyValue != nil) {
         return @{ propertyValue: [MGLStyleValue valueWithRawValue:rawValue] };
     }
-    
+
     return [MGLStyleValue valueWithRawValue:rawValue];
 }
 
@@ -76,13 +80,13 @@
 - (BOOL)isFunctionTypeSupported:(NSArray<NSString *> *)allowedFunctionTypes
 {
     NSString *fnType = (NSString*)payload[@"fn"];
-    
+
     for (NSString *curFnType in allowedFunctionTypes) {
         if ([curFnType isEqualToString:fnType]) {
             return YES;
         }
     }
-    
+
     return NO;
 }
 
@@ -92,11 +96,11 @@
     NSArray<NSArray<NSDictionary *> *> *rawStops = payload[@"stops"];
     NSNumber *mode = payload[@"mode"];
     NSString *attributeName = payload[@"attributeName"];
-    
+
     NSMutableDictionary<id, id> *stops = nil;
     if (rawStops.count > 0) {
         stops = [[NSMutableDictionary alloc] init];
-        
+
         for (NSArray *rawStop in rawStops) {
             NSDictionary *jsStopKey = rawStop[0];
             NSDictionary *jsStopValue = rawStop[1];
@@ -104,7 +108,7 @@
             stops[[self _getStopKey:jsStopKey]] = rctStyleValue.mglStyleValue;
         }
     }
-    
+
     MGLInterpolationMode interpolationMode = [mode integerValue];
     if ([fnType isEqualToString:@"camera"]) {
         return [MGLStyleValue valueWithInterpolationMode:interpolationMode
@@ -130,26 +134,26 @@
     if (![self.type isEqualToString:@"transition"]) {
         return MGLTransitionMake(0, 0);
     }
-    
+
     NSDictionary *config = self.payload[@"value"];
     if (config == nil) {
         return MGLTransitionMake(0, 0);
     }
-    
+
     NSNumber *duration = config[@"duration"];
     NSNumber *delay = config[@"delay"];
-    
+
     return MGLTransitionMake([duration doubleValue], [delay doubleValue]);
 }
 
 - (MGLStyleValue*)getSphericalPosition
 {
     NSArray<NSNumber*> *values = self.payload[@"value"];
-    
+
     CGFloat radial = [values[0] floatValue];
     CLLocationDistance azimuthal = [values[1] doubleValue];
     CLLocationDistance polar = [values[2] doubleValue];
-    
+
     MGLSphericalPosition pos = MGLSphericalPositionMake(radial, azimuthal, polar);
     return [MGLStyleValue valueWithRawValue:[NSValue valueWithMGLSphericalPosition:pos]];
 }
@@ -167,7 +171,7 @@
 {
     NSString *payloadKey = @"value";
     NSString *type = jsStopKey[@"type"];
-    
+
     if ([type isEqualToString:@"number"]) {
         return (NSNumber *)jsStopKey[payloadKey];
     } else if ([type isEqualToString:@"boolean"]) {
